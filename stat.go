@@ -62,7 +62,7 @@ type Stat struct {
 	// Summed up cpu statistics.
 	CPUTotal CPUStat
 	// Per-CPU statistics.
-	CPU []CPUStat
+	CPU map[int64]*CPUStat
 	// Number of times interrupts were handled, which contains numbered and unnumbered IRQs.
 	IRQTotal uint64
 	// Number of times a numbered IRQ was triggered.
@@ -142,6 +142,12 @@ func parseSoftIRQStat(line string) (SoftIRQStat, uint64, error) {
 	return softIRQStat, total, nil
 }
 
+func newStat() Stat {
+	return Stat{
+		CPU: make(map[int64]*CPUStat),
+	}
+}
+
 // NewStat returns information about current cpu/process statistics.
 // See https://www.kernel.org/doc/Documentation/filesystems/proc.txt
 //
@@ -149,7 +155,7 @@ func parseSoftIRQStat(line string) (SoftIRQStat, uint64, error) {
 func NewStat() (Stat, error) {
 	fs, err := NewFS(fs.DefaultProcMountPoint)
 	if err != nil {
-		return Stat{}, err
+		return newStat(), err
 	}
 	return fs.Stat()
 }
@@ -168,10 +174,10 @@ func (fs FS) Stat() (Stat, error) {
 	fileName := fs.proc.Path("stat")
 	data, err := util.ReadFileNoStat(fileName)
 	if err != nil {
-		return Stat{}, err
+		return newStat(), err
 	}
 
-	stat := Stat{}
+	stat := newStat()
 
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
@@ -184,60 +190,57 @@ func (fs FS) Stat() (Stat, error) {
 		switch {
 		case parts[0] == "btime":
 			if stat.BootTime, err = strconv.ParseUint(parts[1], 10, 64); err != nil {
-				return Stat{}, fmt.Errorf("couldn't parse %q (btime): %w", parts[1], err)
+				return newStat(), fmt.Errorf("couldn't parse %q (btime): %w", parts[1], err)
 			}
 		case parts[0] == "intr":
 			if stat.IRQTotal, err = strconv.ParseUint(parts[1], 10, 64); err != nil {
-				return Stat{}, fmt.Errorf("couldn't parse %q (intr): %w", parts[1], err)
+				return newStat(), fmt.Errorf("couldn't parse %q (intr): %w", parts[1], err)
 			}
 			numberedIRQs := parts[2:]
 			stat.IRQ = make([]uint64, len(numberedIRQs))
 			for i, count := range numberedIRQs {
 				if stat.IRQ[i], err = strconv.ParseUint(count, 10, 64); err != nil {
-					return Stat{}, fmt.Errorf("couldn't parse %q (intr%d): %w", count, i, err)
+					return newStat(), fmt.Errorf("couldn't parse %q (intr%d): %w", count, i, err)
 				}
 			}
 		case parts[0] == "ctxt":
 			if stat.ContextSwitches, err = strconv.ParseUint(parts[1], 10, 64); err != nil {
-				return Stat{}, fmt.Errorf("couldn't parse %q (ctxt): %w", parts[1], err)
+				return newStat(), fmt.Errorf("couldn't parse %q (ctxt): %w", parts[1], err)
 			}
 		case parts[0] == "processes":
 			if stat.ProcessCreated, err = strconv.ParseUint(parts[1], 10, 64); err != nil {
-				return Stat{}, fmt.Errorf("couldn't parse %q (processes): %w", parts[1], err)
+				return newStat(), fmt.Errorf("couldn't parse %q (processes): %w", parts[1], err)
 			}
 		case parts[0] == "procs_running":
 			if stat.ProcessesRunning, err = strconv.ParseUint(parts[1], 10, 64); err != nil {
-				return Stat{}, fmt.Errorf("couldn't parse %q (procs_running): %w", parts[1], err)
+				return newStat(), fmt.Errorf("couldn't parse %q (procs_running): %w", parts[1], err)
 			}
 		case parts[0] == "procs_blocked":
 			if stat.ProcessesBlocked, err = strconv.ParseUint(parts[1], 10, 64); err != nil {
-				return Stat{}, fmt.Errorf("couldn't parse %q (procs_blocked): %w", parts[1], err)
+				return newStat(), fmt.Errorf("couldn't parse %q (procs_blocked): %w", parts[1], err)
 			}
 		case parts[0] == "softirq":
 			softIRQStats, total, err := parseSoftIRQStat(line)
 			if err != nil {
-				return Stat{}, err
+				return newStat(), err
 			}
 			stat.SoftIRQTotal = total
 			stat.SoftIRQ = softIRQStats
 		case strings.HasPrefix(parts[0], "cpu"):
 			cpuStat, cpuID, err := parseCPUStat(line)
 			if err != nil {
-				return Stat{}, err
+				return newStat(), err
 			}
 			if cpuID == -1 {
 				stat.CPUTotal = cpuStat
 			} else {
-				for int64(len(stat.CPU)) <= cpuID {
-					stat.CPU = append(stat.CPU, CPUStat{})
-				}
-				stat.CPU[cpuID] = cpuStat
+				stat.CPU[cpuID] = &cpuStat
 			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return Stat{}, fmt.Errorf("couldn't parse %q: %w", fileName, err)
+		return newStat(), fmt.Errorf("couldn't parse %q: %w", fileName, err)
 	}
 
 	return stat, nil
